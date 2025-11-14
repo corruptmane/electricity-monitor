@@ -110,19 +110,19 @@ func formatDuration(d time.Duration) string {
 	var parts []string
 	
 	if days > 0 {
-		parts = append(parts, fmt.Sprintf("%dd"))
+		parts = append(parts, fmt.Sprintf("%dd", days))
 	}
 	
 	if hours > 0 {
-		parts = append(parts, fmt.Sprintf("%dh"))
+		parts = append(parts, fmt.Sprintf("%dh", hours))
 	}
 	
 	if minutes > 0 {
-		parts = append(parts, fmt.Sprintf("%dm"))
+		parts = append(parts, fmt.Sprintf("%dm", minutes))
 	}
 	
 	if seconds > 0 || len(parts) == 0 {
-		parts = append(parts, "%ds")
+		parts = append(parts, fmt.Sprintf("%ds", seconds))
 	}
 	
 	if len(parts) == 0 {
