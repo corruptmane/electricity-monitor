@@ -21,7 +21,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/electricity-monitor
+ReadWritePaths=/var/log/electricity-monitor /var/lib/electricity-monitor
 
 # Resource limits
 LimitNOFILE=1024

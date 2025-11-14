@@ -25,6 +25,7 @@ type Config struct {
 	CheckInterval   time.Duration
 	MessagePowered  string
 	MessageBlackout string
+	StateFilePath   string
 }
 
 type State struct {
@@ -83,6 +84,7 @@ func LoadConfig() (Config, error) {
 		CheckInterval:   time.Duration(checkInterval) * time.Second,
 		MessagePowered:  getEnvOrDefault("MESSAGE_POWERED", "✅ Electricity is back!"),
 		MessageBlackout: getEnvOrDefault("MESSAGE_BLACKOUT", "⚡ Blackout detected"),
+		StateFilePath:   getEnvOrDefault("STATE_FILE_PATH", "/var/lib/electricity-monitor/state.json"),
 	}, nil
 }
 
@@ -95,48 +97,48 @@ func getEnvOrDefault(key, defaultValue string) string {
 
 func formatDuration(d time.Duration) string {
 	d = d.Round(time.Second)
-	
+
 	days := d / (24 * time.Hour)
 	d -= days * 24 * time.Hour
-	
+
 	hours := d / time.Hour
 	d -= hours * time.Hour
-	
+
 	minutes := d / time.Minute
 	d -= minutes * time.Minute
-	
+
 	seconds := d / time.Second
-	
+
 	var parts []string
-	
+
 	if days > 0 {
 		parts = append(parts, fmt.Sprintf("%dd", days))
 	}
-	
+
 	if hours > 0 {
 		parts = append(parts, fmt.Sprintf("%dh", hours))
 	}
-	
+
 	if minutes > 0 {
 		parts = append(parts, fmt.Sprintf("%dm", minutes))
 	}
-	
+
 	if seconds > 0 || len(parts) == 0 {
 		parts = append(parts, fmt.Sprintf("%ds", seconds))
 	}
-	
+
 	if len(parts) == 0 {
 		return "0 seconds"
 	}
-	
+
 	if len(parts) == 1 {
 		return parts[0]
 	}
-	
+
 	if len(parts) == 2 {
 		return parts[0] + " and " + parts[1]
 	}
-	
+
 	lastPart := parts[len(parts)-1]
 	firstParts := parts[:len(parts)-1]
 	return fmt.Sprintf("%s, and %s", joinWithComma(firstParts), lastPart)
@@ -160,6 +162,45 @@ func NewMonitor(config Config) *Monitor {
 		state:   nil,
 		client:  &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+func (m *Monitor) saveState() error {
+	if m.state == nil {
+		return nil
+	}
+
+	data, err := json.MarshalIndent(m.state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal state: %w", err)
+	}
+
+	if err := os.WriteFile(m.config.StateFilePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write state file: %w", err)
+	}
+
+	log.Printf("State saved to %s", m.config.StateFilePath)
+	return nil
+}
+
+func (m *Monitor) loadState() error {
+	data, err := os.ReadFile(m.config.StateFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("No existing state file found at %s, starting fresh", m.config.StateFilePath)
+			return nil
+		}
+		return fmt.Errorf("failed to read state file: %w", err)
+	}
+
+	var state State
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("failed to unmarshal state: %w", err)
+	}
+
+	m.state = &state
+	log.Printf("State loaded from %s: powered=%v, since=%s",
+		m.config.StateFilePath, state.IsPowered, state.Since.Format(time.RFC3339))
+	return nil
 }
 
 func (m *Monitor) ping() (bool, error) {
@@ -244,6 +285,9 @@ func (m *Monitor) updateState(isAlive bool) {
 			message = m.config.MessagePowered
 		}
 		log.Printf("Initial state established: powered=%v at %s", currentState, now.Format(time.RFC3339))
+		if err := m.saveState(); err != nil {
+			log.Printf("Failed to save state: %v", err)
+		}
 		if err := m.sendTelegramMessage(message); err != nil {
 			log.Printf("Failed to send initial state message: %v", err)
 		}
@@ -253,7 +297,7 @@ func (m *Monitor) updateState(isAlive bool) {
 	if m.state.IsPowered != currentState {
 		duration := now.Sub(m.state.Since)
 		oldState := m.state.IsPowered
-		
+
 		var message string
 		if currentState {
 			message = fmt.Sprintf("%s\n\nBlackout lasted: %s", m.config.MessagePowered, formatDuration(duration))
@@ -262,12 +306,16 @@ func (m *Monitor) updateState(isAlive bool) {
 		}
 
 		log.Printf("State changed: powered=%v -> powered=%v, duration: %s", oldState, currentState, formatDuration(duration))
-		
+
 		m.state = &State{
 			IsPowered: currentState,
 			Since:     now,
 		}
-		
+
+		if err := m.saveState(); err != nil {
+			log.Printf("Failed to save state: %v", err)
+		}
+
 		if err := m.sendTelegramMessage(message); err != nil {
 			log.Printf("Failed to send state change message: %v", err)
 		}
@@ -275,6 +323,11 @@ func (m *Monitor) updateState(isAlive bool) {
 }
 
 func (m *Monitor) Run(ctx context.Context) error {
+	// Load existing state from disk
+	if err := m.loadState(); err != nil {
+		log.Printf("Warning: Failed to load state: %v", err)
+	}
+
 	ticker := time.NewTicker(m.config.CheckInterval)
 	defer ticker.Stop()
 
