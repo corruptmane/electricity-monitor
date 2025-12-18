@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-ping/ping"
+	"github.com/prometheus-community/pro-bing"
 )
 
 type Config struct {
@@ -25,6 +25,11 @@ type Config struct {
 	CheckInterval   time.Duration
 	MessagePowered  string
 	MessageBlackout string
+	MessageDuration string
+	LabelDay        string
+	LabelHour       string
+	LabelMinute     string
+	LabelSecond     string
 	StateFilePath   string
 }
 
@@ -41,7 +46,7 @@ type Monitor struct {
 }
 
 func LoadConfig() (Config, error) {
-	threshold, err := strconv.Atoi(getEnvOrDefault("THRESHOLD", "3"))
+	threshold, err := strconv.Atoi(getEnvOrDefault("THRESHOLD", "2"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid THRESHOLD: %w", err)
 	}
@@ -51,7 +56,7 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("invalid PING_TIMEOUT: %w", err)
 	}
 
-	checkInterval, err := strconv.Atoi(getEnvOrDefault("CHECK_INTERVAL", "20"))
+	checkInterval, err := strconv.Atoi(getEnvOrDefault("CHECK_INTERVAL", "15"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid CHECK_INTERVAL: %w", err)
 	}
@@ -82,8 +87,13 @@ func LoadConfig() (Config, error) {
 		Threshold:       threshold,
 		PingTimeout:     time.Duration(pingTimeout) * time.Second,
 		CheckInterval:   time.Duration(checkInterval) * time.Second,
-		MessagePowered:  getEnvOrDefault("MESSAGE_POWERED", "✅ Electricity is back!"),
-		MessageBlackout: getEnvOrDefault("MESSAGE_BLACKOUT", "⚡ Blackout detected"),
+		MessagePowered:  getEnvOrDefault("MESSAGE_POWERED", "✅ Блекаут скінчився!"),
+		MessageBlackout: getEnvOrDefault("MESSAGE_BLACKOUT", "⚡ Відключення електроенергії"),
+		MessageDuration: getEnvOrDefault("MESSAGE_DURATION", "Тривалість"),
+		LabelDay:        getEnvOrDefault("LABEL_DAY", "дн"),
+		LabelHour:       getEnvOrDefault("LABEL_HOUR", "год"),
+		LabelMinute:     getEnvOrDefault("LABEL_MINUTE", "хв"),
+		LabelSecond:     getEnvOrDefault("LABEL_SECOND", "сек"),
 		StateFilePath:   getEnvOrDefault("STATE_FILE_PATH", "/var/lib/electricity-monitor/state.json"),
 	}, nil
 }
@@ -95,7 +105,7 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-func formatDuration(d time.Duration) string {
+func formatDuration(d time.Duration, config Config) string {
 	d = d.Round(time.Second)
 
 	days := d / (24 * time.Hour)
@@ -112,36 +122,39 @@ func formatDuration(d time.Duration) string {
 	var parts []string
 
 	if days > 0 {
-		parts = append(parts, fmt.Sprintf("%dd", days))
+		parts = append(parts, fmt.Sprintf("%d%s", days, config.LabelDay))
 	}
 
 	if hours > 0 {
-		parts = append(parts, fmt.Sprintf("%dh", hours))
+		parts = append(parts, fmt.Sprintf("%d%s", hours, config.LabelHour))
 	}
 
 	if minutes > 0 {
-		parts = append(parts, fmt.Sprintf("%dm", minutes))
+		parts = append(parts, fmt.Sprintf("%d%s", minutes, config.LabelMinute))
 	}
 
 	if seconds > 0 || len(parts) == 0 {
-		parts = append(parts, fmt.Sprintf("%ds", seconds))
+		parts = append(parts, fmt.Sprintf("%d%s", seconds, config.LabelSecond))
 	}
 
 	if len(parts) == 0 {
-		return "0 seconds"
+		return fmt.Sprintf("0 %s", config.LabelSecond)
 	}
 
 	if len(parts) == 1 {
 		return parts[0]
 	}
 
-	if len(parts) == 2 {
-		return parts[0] + " and " + parts[1]
-	}
+	return joinWithComma(parts)
 
-	lastPart := parts[len(parts)-1]
-	firstParts := parts[:len(parts)-1]
-	return fmt.Sprintf("%s, and %s", joinWithComma(firstParts), lastPart)
+	// if len(parts) == 2 {
+	// 	return parts[0] + " and " + parts[1]
+	// }
+
+	// lastPart := parts[len(parts)-1]
+	// firstParts := parts[:len(parts)-1]
+
+	// return fmt.Sprintf("%s, and %s", joinWithComma(firstParts), lastPart)
 }
 
 func joinWithComma(parts []string) string {
@@ -204,7 +217,7 @@ func (m *Monitor) loadState() error {
 }
 
 func (m *Monitor) ping() (bool, error) {
-	pinger, err := ping.NewPinger(m.config.Domain)
+	pinger, err := probing.NewPinger(m.config.Domain)
 	if err != nil {
 		return false, fmt.Errorf("failed to create pinger: %w", err)
 	}
@@ -298,14 +311,16 @@ func (m *Monitor) updateState(isAlive bool) {
 		duration := now.Sub(m.state.Since)
 		oldState := m.state.IsPowered
 
-		var message string
+		var messageTitle string
+		durationFormatted := fmt.Sprintf("%s: %s", m.config.MessageDuration, formatDuration(duration, m.config))
 		if currentState {
-			message = fmt.Sprintf("%s\n\nBlackout lasted: %s", m.config.MessagePowered, formatDuration(duration))
+			messageTitle = m.config.MessagePowered
 		} else {
-			message = fmt.Sprintf("%s\n\nElectricity was on for: %s", m.config.MessageBlackout, formatDuration(duration))
+			messageTitle = m.config.MessageBlackout
 		}
+		message := fmt.Sprintf("%s\n\n%s", messageTitle, durationFormatted)
 
-		log.Printf("State changed: powered=%v -> powered=%v, duration: %s", oldState, currentState, formatDuration(duration))
+		log.Printf("State changed: powered=%v -> powered=%v, duration: %s", oldState, currentState, formatDuration(duration, m.config))
 
 		m.state = &State{
 			IsPowered: currentState,
