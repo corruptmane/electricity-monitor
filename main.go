@@ -25,7 +25,6 @@ type Config struct {
 	CheckInterval   time.Duration
 	MessagePowered  string
 	MessageBlackout string
-	MessageDuration string
 	LabelDay        string
 	LabelHour       string
 	LabelMinute     string
@@ -89,7 +88,6 @@ func LoadConfig() (Config, error) {
 		CheckInterval:   time.Duration(checkInterval) * time.Second,
 		MessagePowered:  getEnvOrDefault("MESSAGE_POWERED", "✅ Блекаут скінчився!"),
 		MessageBlackout: getEnvOrDefault("MESSAGE_BLACKOUT", "⚡ Відключення електроенергії"),
-		MessageDuration: getEnvOrDefault("MESSAGE_DURATION", "Тривалість"),
 		LabelDay:        getEnvOrDefault("LABEL_DAY", "дн"),
 		LabelHour:       getEnvOrDefault("LABEL_HOUR", "год"),
 		LabelMinute:     getEnvOrDefault("LABEL_MINUTE", "хв"),
@@ -145,7 +143,8 @@ func formatDuration(d time.Duration, config Config) string {
 		return parts[0]
 	}
 
-	return joinWithComma(parts)
+	return joinWithSpaces(parts)
+	// return joinWithComma(parts)
 
 	// if len(parts) == 2 {
 	// 	return parts[0] + " and " + parts[1]
@@ -162,6 +161,17 @@ func joinWithComma(parts []string) string {
 	for i, part := range parts {
 		if i > 0 {
 			result += ", "
+		}
+		result += part
+	}
+	return result
+}
+
+func joinWithSpaces(parts []string) string {
+	result := ""
+	for i, part := range parts {
+		if i > 0 {
+			result += " "
 		}
 		result += part
 	}
@@ -312,13 +322,13 @@ func (m *Monitor) updateState(isAlive bool) {
 		oldState := m.state.IsPowered
 
 		var messageTitle string
-		durationFormatted := fmt.Sprintf("%s: %s", m.config.MessageDuration, formatDuration(duration, m.config))
 		if currentState {
 			messageTitle = m.config.MessagePowered
 		} else {
 			messageTitle = m.config.MessageBlackout
 		}
-		message := fmt.Sprintf("%s\n\n%s", messageTitle, durationFormatted)
+		message := fmt.Sprintf("%s: %s", messageTitle, formatDuration(duration, m.config))
+		// message := fmt.Sprintf("%s\n\n%s", messageTitle, durationFormatted)
 
 		log.Printf("State changed: powered=%v -> powered=%v, duration: %s", oldState, currentState, formatDuration(duration, m.config))
 
